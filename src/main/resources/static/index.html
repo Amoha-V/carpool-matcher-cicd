@@ -1,0 +1,219 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Campus Carpool Matcher</title>
+<style>
+  :root { --bg:#f5f7fa; --card:#fff; --ink:#1d2733; --muted:#667085; --brand:#0f766e; --line:#e4e7ec; --warn:#b42318; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#10151c; --card:#18202a; --ink:#e8edf3; --muted:#98a2b3; --brand:#2dd4bf; --line:#2a3441; --warn:#f97066; }
+  }
+  * { box-sizing: border-box; }
+  body { margin:0; font-family: system-ui, -apple-system, "Segoe UI", sans-serif; background:var(--bg); color:var(--ink); }
+  header { padding:20px 24px; border-bottom:1px solid var(--line); background:var(--card); }
+  header h1 { margin:0; font-size:1.4rem; color:var(--brand); }
+  main { max-width:1000px; margin:0 auto; padding:20px; display:grid; gap:20px; grid-template-columns: 1fr 1fr; }
+  @media (max-width: 800px) { main { grid-template-columns: 1fr; } }
+  section { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:18px; }
+  section.wide { grid-column: 1 / -1; }
+  h2 { margin:0 0 12px; font-size:1.05rem; }
+  label { display:block; font-size:.8rem; color:var(--muted); margin:10px 0 4px; }
+  input, select, button { width:100%; padding:9px 10px; border-radius:8px; border:1px solid var(--line); background:var(--bg); color:var(--ink); font:inherit; }
+  button { background:var(--brand); color:#fff; border:none; cursor:pointer; margin-top:14px; font-weight:600; }
+  button.small { width:auto; margin:0; padding:6px 12px; }
+  .row { display:grid; grid-template-columns:1fr 1fr; gap:10px; }
+  .msg { margin-top:10px; font-size:.9rem; min-height:1.2em; }
+  .msg.err { color:var(--warn); }
+  .msg.ok { color:var(--brand); }
+  .match { border:1px solid var(--line); border-radius:10px; padding:12px; margin-top:10px; display:flex; justify-content:space-between; gap:12px; align-items:center; }
+  .match .meta { font-size:.82rem; color:var(--muted); margin-top:4px; }
+  .score { font-weight:700; color:var(--brand); }
+  .tablewrap { overflow-x:auto; }
+  table { width:100%; border-collapse:collapse; font-size:.9rem; }
+  th, td { text-align:left; padding:8px 6px; border-bottom:1px solid var(--line); white-space:nowrap; }
+  footer { text-align:center; color:var(--muted); font-size:.8rem; padding:16px; }
+</style>
+</head>
+<body>
+<header><h1 id="title">Campus Carpool Matcher</h1></header>
+<main>
+  <section>
+    <h2>Find a ride</h2>
+    <label for="sOrigin">From</label><select id="sOrigin"></select>
+    <label for="sDest">To</label><select id="sDest"></select>
+    <label for="sTime">Preferred departure</label><input id="sTime" type="datetime-local">
+    <div class="row">
+      <div><label for="sFlex">Time flexibility (± minutes)</label><input id="sFlex" type="number" min="0" max="240" value="30"></div>
+      <div><label for="sRider">Your name</label><input id="sRider" maxlength="60" placeholder="e.g. Amoha"></div>
+    </div>
+    <button id="searchBtn">Search matches</button>
+    <div class="msg" id="searchMsg"></div>
+    <div id="results"></div>
+  </section>
+
+  <section>
+    <h2>Offer a ride</h2>
+    <label for="oDriver">Your name</label><input id="oDriver" maxlength="60">
+    <div class="row">
+      <div><label for="oOrigin">From</label><select id="oOrigin"></select></div>
+      <div><label for="oDest">To</label><select id="oDest"></select></div>
+    </div>
+    <div class="row">
+      <div><label for="oTime">Departure</label><input id="oTime" type="datetime-local"></div>
+      <div><label for="oSeats">Seats (1-6)</label><input id="oSeats" type="number" min="1" max="6" value="3"></div>
+    </div>
+    <button id="offerBtn">Publish ride</button>
+    <div class="msg" id="offerMsg"></div>
+  </section>
+
+  <section class="wide">
+    <h2>All rides</h2>
+    <div class="tablewrap">
+      <table>
+        <thead><tr><th>Driver</th><th>From</th><th>To</th><th>Departure</th><th>Seats left</th></tr></thead>
+        <tbody id="offersBody"></tbody>
+      </table>
+    </div>
+  </section>
+</main>
+<footer id="footer">Loading...</footer>
+
+<script>
+const labels = {};
+
+function el(tag, text, cls) {
+  const e = document.createElement(tag);
+  if (text !== undefined) e.textContent = text;
+  if (cls) e.className = cls;
+  return e;
+}
+
+function show(id, text, ok) {
+  const e = document.getElementById(id);
+  e.textContent = text;
+  e.className = 'msg ' + (ok ? 'ok' : 'err');
+}
+
+async function api(path, options) {
+  const res = await fetch(path, options);
+  if (!res.ok) {
+    let text = 'Request failed (' + res.status + ')';
+    try { const body = await res.json(); if (body.message) text = body.message; } catch (e) {}
+    throw new Error(text);
+  }
+  return res.status === 204 ? null : res.json();
+}
+
+function post(path, body) {
+  return api(path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+}
+
+function toLocalInput(d) {
+  const p = n => String(n).padStart(2, '0');
+  return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate()) + 'T' + p(d.getHours()) + ':' + p(d.getMinutes());
+}
+
+function withSeconds(v) { return v.length === 16 ? v + ':00' : v; }
+function fmt(iso) { return new Date(iso).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' }); }
+
+async function loadInfo() {
+  const info = await api('/api/info');
+  document.getElementById('title').textContent = info.message;
+  document.title = info.message;
+  document.getElementById('footer').textContent = 'Version ' + info.version + '  |  Build ' + info.build + '  |  Env: ' + info.environment + '  |  Pod: ' + info.pod;
+}
+
+async function loadPlaces() {
+  const places = await api('/api/places');
+  places.forEach(p => labels[p.code] = p.label);
+  ['sOrigin', 'sDest', 'oOrigin', 'oDest'].forEach(id => {
+    const sel = document.getElementById(id);
+    places.forEach(p => sel.appendChild(new Option(p.label, p.code)));
+  });
+  document.getElementById('sOrigin').value = 'TAMBARAM';
+  document.getElementById('sDest').value = 'SNU_CHENNAI';
+  document.getElementById('oOrigin').value = 'TAMBARAM';
+  document.getElementById('oDest').value = 'SNU_CHENNAI';
+}
+
+async function loadOffers() {
+  const offers = await api('/api/offers');
+  const body = document.getElementById('offersBody');
+  body.replaceChildren();
+  offers.forEach(o => {
+    const tr = document.createElement('tr');
+    [o.driverName, labels[o.origin], labels[o.destination], fmt(o.departureTime),
+     o.seatsAvailable + ' / ' + o.seatsTotal].forEach(v => tr.appendChild(el('td', v)));
+    body.appendChild(tr);
+  });
+}
+
+async function search() {
+  const box = document.getElementById('results');
+  box.replaceChildren();
+  try {
+    const matches = await post('/api/matches', {
+      origin: document.getElementById('sOrigin').value,
+      destination: document.getElementById('sDest').value,
+      departureTime: withSeconds(document.getElementById('sTime').value),
+      flexMinutes: parseInt(document.getElementById('sFlex').value || '0', 10)
+    });
+    show('searchMsg', matches.length ? matches.length + ' match(es), best first' : 'No matching rides. Try a wider time window.', matches.length > 0);
+    matches.forEach(m => {
+      const card = el('div', undefined, 'match');
+      const left = document.createElement('div');
+      left.appendChild(el('strong', m.driverName + '  ' + labels[m.origin] + ' to ' + labels[m.destination]));
+      left.appendChild(el('div', fmt(m.departureTime) + '  |  pickup ' + m.pickupKm + ' km away  |  drop-off ' +
+        m.dropKm + ' km away  |  ' + m.timeDiffMinutes + ' min from your time  |  ' + m.seatsAvailable + ' seat(s) left', 'meta'));
+      const right = document.createElement('div');
+      right.appendChild(el('div', 'Score ' + m.score, 'score'));
+      const btn = el('button', 'Book seat', 'small');
+      btn.addEventListener('click', () => book(m.offerId));
+      right.appendChild(btn);
+      card.appendChild(left);
+      card.appendChild(right);
+      box.appendChild(card);
+    });
+  } catch (e) { show('searchMsg', e.message, false); }
+}
+
+async function book(offerId) {
+  const rider = document.getElementById('sRider').value.trim();
+  if (!rider) { show('searchMsg', 'Enter your name before booking.', false); return; }
+  try {
+    await post('/api/offers/' + offerId + '/book', { riderName: rider });
+    show('searchMsg', 'Seat booked!', true);
+    await loadOffers();
+    await search();
+    show('searchMsg', 'Seat booked!', true);
+  } catch (e) { show('searchMsg', e.message, false); }
+}
+
+async function offerRide() {
+  try {
+    await post('/api/offers', {
+      driverName: document.getElementById('oDriver').value,
+      origin: document.getElementById('oOrigin').value,
+      destination: document.getElementById('oDest').value,
+      departureTime: withSeconds(document.getElementById('oTime').value),
+      seatsTotal: parseInt(document.getElementById('oSeats').value || '0', 10)
+    });
+    show('offerMsg', 'Ride published.', true);
+    await loadOffers();
+  } catch (e) { show('offerMsg', e.message, false); }
+}
+
+(async function init() {
+  const t = new Date();
+  t.setDate(t.getDate() + 1); t.setHours(7, 45, 0, 0);
+  document.getElementById('sTime').value = toLocalInput(t);
+  document.getElementById('oTime').value = toLocalInput(t);
+  document.getElementById('searchBtn').addEventListener('click', search);
+  document.getElementById('offerBtn').addEventListener('click', offerRide);
+  try { await loadPlaces(); await loadOffers(); await loadInfo(); }
+  catch (e) { document.getElementById('footer').textContent = 'Could not reach the API: ' + e.message; }
+})();
+</script>
+</body>
+</html>

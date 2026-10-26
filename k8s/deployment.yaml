@@ -1,0 +1,65 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: carpool-matcher
+  namespace: carpool
+  labels:
+    app: carpool-matcher
+spec:
+  # One replica: rides and bookings live in the pod's in-memory H2 database,
+  # so extra replicas would each hold different data (see README, Limitations).
+  replicas: 1
+  revisionHistoryLimit: 3
+  selector:
+    matchLabels:
+      app: carpool-matcher
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  template:
+    metadata:
+      labels:
+        app: carpool-matcher
+    spec:
+      terminationGracePeriodSeconds: 30
+      containers:
+        - name: app
+          # Replaced by the Ansible playbook with registry/image:tag
+          image: IMAGE_PLACEHOLDER
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8080
+          envFrom:
+            - configMapRef:
+                name: carpool-config
+          resources:
+            requests:
+              cpu: 200m
+              memory: 384Mi
+            limits:
+              cpu: 500m
+              memory: 640Mi
+          securityContext:
+            runAsNonRoot: true
+            allowPrivilegeEscalation: false
+          startupProbe:
+            httpGet:
+              path: /actuator/health/liveness
+              port: http
+            periodSeconds: 5
+            failureThreshold: 30
+          readinessProbe:
+            httpGet:
+              path: /actuator/health/readiness
+              port: http
+            periodSeconds: 10
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /actuator/health/liveness
+              port: http
+            periodSeconds: 20
+            failureThreshold: 3

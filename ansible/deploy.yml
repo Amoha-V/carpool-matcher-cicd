@@ -1,0 +1,87 @@
+---
+# Deploys (or updates) Carpool Matcher on the cluster that kubectl is currently pointed at.
+#
+#   ansible-playbook -i ansible/inventory.ini ansible/deploy.yml \
+#       -e image=docker.io/<user>/carpool-matcher:<tag> -e build_tag=<tag>
+- name: Deploy Carpool Matcher to Kubernetes
+  hosts: local
+  gather_facts: false
+  vars:
+    namespace: carpool
+    app_name: carpool-matcher
+    k8s_dir: "{{ playbook_dir }}/../k8s"
+    image: ""
+    build_tag: ""
+
+  tasks:
+    - name: Make sure an image and build tag were supplied
+      ansible.builtin.assert:
+        that:
+          - image | length > 0
+          - build_tag | length > 0
+        fail_msg: "Run with -e image=<registry/image:tag> -e build_tag=<tag>"
+
+    - name: Apply namespace, config map and service
+      ansible.builtin.command:
+        argv:
+          - kubectl
+          - apply
+          - -f
+          - "{{ k8s_dir }}/namespace.yaml"
+          - -f
+          - "{{ k8s_dir }}/configmap.yaml"
+          - -f
+          - "{{ k8s_dir }}/service.yaml"
+      register: base_apply
+      changed_when: "'created' in base_apply.stdout or 'configured' in base_apply.stdout"
+
+    - name: Apply the deployment with the new image
+      ansible.builtin.shell: |
+        set -o pipefail
+        sed 's|IMAGE_PLACEHOLDER|{{ image }}|g' "{{ k8s_dir }}/deployment.yaml" | kubectl apply -f -
+      args:
+        executable: /bin/bash
+      register: deploy_apply
+      changed_when: "'created' in deploy_apply.stdout or 'configured' in deploy_apply.stdout"
+
+    - name: Wait for the rollout to finish
+      ansible.builtin.command:
+        argv:
+          - kubectl
+          - -n
+          - "{{ namespace }}"
+          - rollout
+          - status
+          - "deployment/{{ app_name }}"
+          - --timeout=300s
+      changed_when: false
+
+    - name: Wait for the service to get a public IP
+      ansible.builtin.command:
+        argv:
+          - kubectl
+          - -n
+          - "{{ namespace }}"
+          - get
+          - svc
+          - "{{ app_name }}"
+          - -o
+          - "jsonpath={.status.loadBalancer.ingress[0].ip}"
+      register: app_ip
+      until: app_ip.stdout | length > 0
+      retries: 30
+      delay: 10
+      changed_when: false
+
+    - name: Smoke test - the new build is serving traffic
+      ansible.builtin.uri:
+        url: "http://{{ app_ip.stdout }}/api/info"
+        return_content: true
+      register: info
+      until: (info.status | default(0)) == 200 and info.json is defined and info.json.build == build_tag
+      retries: 18
+      delay: 10
+
+    - name: Show where the application is running
+      ansible.builtin.debug:
+        msg: "Application URL: http://{{ app_ip.stdout }}  (build {{ info.json.build }}, pod {{ info.json.pod }})"

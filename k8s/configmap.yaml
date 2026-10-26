@@ -1,0 +1,8 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: carpool-config
+  namespace: carpool
+data:
+  APP_ENV: "azure-aks"
+  JAVA_OPTS: "-XX:MaxRAMPercentage=70.0"

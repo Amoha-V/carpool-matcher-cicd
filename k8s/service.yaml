@@ -1,0 +1,16 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: carpool-matcher
+  namespace: carpool
+  labels:
+    app: carpool-matcher
+spec:
+  # Azure provisions a public IP for a LoadBalancer service
+  type: LoadBalancer
+  selector:
+    app: carpool-matcher
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
