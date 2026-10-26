@@ -6,3 +6,5 @@ metadata:
 data:
   APP_ENV: "azure-aks"
   JAVA_OPTS: "-XX:MaxRAMPercentage=70.0"
+  SPRING_DATASOURCE_URL: "jdbc:postgresql://postgres:5432/carpool"
+  SPRING_DATASOURCE_USERNAME: "carpool"

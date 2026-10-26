@@ -95,6 +95,7 @@ jobs:
       IMAGE: docker.io/${{ secrets.DOCKERHUB_USERNAME }}/carpool-matcher:${{ needs.docker.outputs.tag }}
       BUILD_TAG: ${{ needs.docker.outputs.tag }}
       KUBE_CONFIG: ${{ secrets.KUBE_CONFIG }}
+      POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
     steps:
       - name: Checkout source code
         uses: actions/checkout@v4
@@ -120,5 +121,5 @@ jobs:
       - name: Show deployment status
         if: always()
         run: |
-          kubectl -n carpool get deployment,pods,svc -o wide
+          kubectl -n carpool get deployment,statefulset,pods,pvc,svc -o wide
           kubectl -n carpool rollout history deployment/carpool-matcher

@@ -6,9 +6,8 @@ metadata:
   labels:
     app: carpool-matcher
 spec:
-  # One replica: rides and bookings live in the pod's in-memory H2 database,
-  # so extra replicas would each hold different data (see README, Limitations).
-  replicas: 1
+  # "replicas" is intentionally not set: it defaults to 1 on first creation and later
+  # `kubectl scale` changes are kept when the pipeline re-applies this file.
   revisionHistoryLimit: 3
   selector:
     matchLabels:
@@ -35,6 +34,12 @@ spec:
           envFrom:
             - configMapRef:
                 name: carpool-config
+          env:
+            - name: SPRING_DATASOURCE_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: carpool-db
+                  key: password
           resources:
             requests:
               cpu: 200m

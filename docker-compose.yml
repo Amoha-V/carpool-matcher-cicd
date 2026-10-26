@@ -1,0 +1,37 @@
+# Local run with a real PostgreSQL database (data survives restarts in the "pgdata" volume):
+#   mvn clean package
+#   docker compose up --build
+# Stop with Ctrl+C; "docker compose down -v" also deletes the stored data.
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: carpool
+      POSTGRES_USER: carpool
+      POSTGRES_PASSWORD: carpool
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U carpool -d carpool"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  app:
+    build:
+      context: .
+      args:
+        BUILD_SHA: compose
+    ports:
+      - "8080:8080"
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:postgresql://db:5432/carpool
+      SPRING_DATASOURCE_USERNAME: carpool
+      SPRING_DATASOURCE_PASSWORD: carpool
+      APP_ENV: docker-compose
+    depends_on:
+      db:
+        condition: service_healthy
+
+volumes:
+  pgdata:

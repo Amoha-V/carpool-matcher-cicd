@@ -18,7 +18,9 @@ flowchart LR
     end
     A -->|kubectl apply + rollout| AKS
     subgraph Azure
-      AKS[AKS cluster: Deployment + LoadBalancer Service]
+      AKS[AKS cluster: app Deployment + LoadBalancer Service]
+      PG[(PostgreSQL StatefulSet + persistent disk)]
+      AKS --> PG
     end
     User[Browser] -->|HTTP| AKS
 ```
@@ -40,7 +42,8 @@ flowchart LR
 | `src/main`, `src/test` | Application code and JUnit tests |
 | `pom.xml` | Maven build (produces `target/app.jar`) |
 | `Dockerfile`, `.dockerignore` | Container image (non-root, JRE only) |
-| `k8s/` | Namespace, ConfigMap, Deployment (probes, resources, rolling update), Service (LoadBalancer) |
+| `k8s/` | Namespace, ConfigMap, Deployment (probes, resources, rolling update), Service (LoadBalancer), `postgres.yaml` (StatefulSet + persistent volume) |
+| `docker-compose.yml` | Local app + PostgreSQL with a persistent volume |
 | `ansible/` | `deploy.yml` playbook and inventory: applies manifests, waits for rollout, smoke-tests the endpoint |
 | `.github/workflows/ci-cd.yml` | The pipeline |
 
@@ -57,6 +60,13 @@ With Docker:
 mvn clean package
 docker build -t carpool-matcher:local --build-arg BUILD_SHA=local .
 docker run --rm -p 8080:8080 carpool-matcher:local
+```
+
+With Docker Compose and a real, persistent PostgreSQL database:
+
+```bash
+mvn clean package
+docker compose up --build        # data survives restarts; "docker compose down -v" wipes it
 ```
 
 Health endpoints used by Kubernetes: `/actuator/health/liveness`, `/actuator/health/readiness`.
@@ -79,6 +89,7 @@ Triggered automatically on every push to `main` (pull requests only run build an
 | `DOCKERHUB_USERNAME` | Docker Hub user name |
 | `DOCKERHUB_TOKEN` | Docker Hub access token (Account settings > Personal access tokens) |
 | `KUBE_CONFIG` | Base64 of a kubeconfig for the AKS cluster (see below) |
+| `POSTGRES_PASSWORD` | Password for the database. Keep it unchanged: PostgreSQL only reads it the first time the volume is initialised |
 
 ## One-time Azure setup
 
@@ -107,8 +118,10 @@ az group delete -n cia2-rg --yes --no-wait
 
 ## Security notes and limitations
 
-* Secrets live only in GitHub Actions secrets; the image runs as a non-root user and the pod forbids privilege escalation.
+* Secrets (Docker Hub token, kubeconfig, database password) live only in GitHub Actions secrets and a Kubernetes Secret; the image runs as a non-root user and the pod forbids privilege escalation.
 * The kubeconfig is a cluster credential. A production setup would use OIDC federation or a least-privilege service account.
-* Data is stored in an in-memory H2 database, so it resets when the pod restarts and the Deployment runs a single
-  replica to keep data consistent. Replacing H2 with PostgreSQL would allow several replicas.
+* Data is stored in PostgreSQL running as a StatefulSet on a 1 GiB Azure managed disk, so it survives pod restarts and
+  redeployments. It is a single-instance database (no replication or backups); production would use a managed service
+  such as Azure Database for PostgreSQL.
+* The sample rides are only seeded when the table is empty, so scale the app with `kubectl scale` after the first start.
 * The Service is plain HTTP; TLS would need an ingress controller and a certificate.

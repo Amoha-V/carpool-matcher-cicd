@@ -1,6 +1,8 @@
 ---
-# Deploys (or updates) Carpool Matcher on the cluster that kubectl is currently pointed at.
+# Deploys (or updates) Carpool Matcher and its PostgreSQL database on the cluster
+# that kubectl is currently pointed at.
 #
+#   export POSTGRES_PASSWORD=<password>
 #   ansible-playbook -i ansible/inventory.ini ansible/deploy.yml \
 #       -e image=docker.io/<user>/carpool-matcher:<tag> -e build_tag=<tag>
 - name: Deploy Carpool Matcher to Kubernetes
@@ -21,13 +23,48 @@
           - build_tag | length > 0
         fail_msg: "Run with -e image=<registry/image:tag> -e build_tag=<tag>"
 
-    - name: Apply namespace, config map and service
+    - name: Make sure the database password was supplied
+      ansible.builtin.assert:
+        that:
+          - lookup('env', 'POSTGRES_PASSWORD') | length > 0
+        fail_msg: "Set the POSTGRES_PASSWORD environment variable"
+      no_log: true
+
+    - name: Create the namespace
+      ansible.builtin.command:
+        argv: [kubectl, apply, -f, "{{ k8s_dir }}/namespace.yaml"]
+      register: ns_apply
+      changed_when: "'created' in ns_apply.stdout"
+
+    - name: Create or update the database secret
+      ansible.builtin.shell: |
+        set -o pipefail
+        kubectl -n {{ namespace }} create secret generic carpool-db \
+          --from-literal=password="$POSTGRES_PASSWORD" \
+          --dry-run=client -o yaml | kubectl apply -f -
+      args:
+        executable: /bin/bash
+      environment:
+        POSTGRES_PASSWORD: "{{ lookup('env', 'POSTGRES_PASSWORD') }}"
+      no_log: true
+      changed_when: false
+
+    - name: Deploy PostgreSQL (StatefulSet with a persistent volume)
+      ansible.builtin.command:
+        argv: [kubectl, apply, -f, "{{ k8s_dir }}/postgres.yaml"]
+      register: pg_apply
+      changed_when: "'created' in pg_apply.stdout or 'configured' in pg_apply.stdout"
+
+    - name: Wait for PostgreSQL to be ready
+      ansible.builtin.command:
+        argv: [kubectl, -n, "{{ namespace }}", rollout, status, statefulset/postgres, --timeout=300s]
+      changed_when: false
+
+    - name: Apply config map and service
       ansible.builtin.command:
         argv:
           - kubectl
           - apply
-          - -f
-          - "{{ k8s_dir }}/namespace.yaml"
           - -f
           - "{{ k8s_dir }}/configmap.yaml"
           - -f
@@ -46,14 +83,7 @@
 
     - name: Wait for the rollout to finish
       ansible.builtin.command:
-        argv:
-          - kubectl
-          - -n
-          - "{{ namespace }}"
-          - rollout
-          - status
-          - "deployment/{{ app_name }}"
-          - --timeout=300s
+        argv: [kubectl, -n, "{{ namespace }}", rollout, status, "deployment/{{ app_name }}", --timeout=300s]
       changed_when: false
 
     - name: Wait for the service to get a public IP
